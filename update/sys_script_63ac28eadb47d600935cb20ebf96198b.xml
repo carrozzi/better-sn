@@ -1,0 +1,303 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<record_update sys_domain="global" table="sys_script">
+    <sys_script action="INSERT_OR_UPDATE">
+        <abort_action>false</abort_action>
+        <access>package_private</access>
+        <action_delete>false</action_delete>
+        <action_insert>true</action_insert>
+        <action_query>true</action_query>
+        <action_update>true</action_update>
+        <active>true</active>
+        <add_message>false</add_message>
+        <advanced>true</advanced>
+        <change_fields>false</change_fields>
+        <client_callable>false</client_callable>
+        <collection>incident</collection>
+        <condition>current.category == "Contrail";</condition>
+        <description/>
+        <execute_function>false</execute_function>
+        <filter_condition/>
+        <is_rest>false</is_rest>
+        <message/>
+        <name>contrail integration</name>
+        <order>1</order>
+        <priority>10</priority>
+        <rest_method/>
+        <rest_method_text/>
+        <rest_service/>
+        <rest_service_text/>
+        <rest_variables/>
+        <role_conditions/>
+        <script><![CDATA[(function executeRule(current, previous /*null when async*/) {
+	
+	// Business rule for connecting incident table to remote Contrail Instance via REST
+	var mytoken;
+	var vn_uuid;
+	var numpolicies;
+	var policynum;
+	var policylist;
+	var policystr="";
+	var policyname="incident_" + current.number;
+	var myaction = current.u_contrail_action;
+	var foundpolicy = false;
+	var policy_uuid;
+	//current.short_description = myaction + " Todd test";
+	// tmc: step 1: get auth token from Openstack Keystone
+	
+	try {
+		var tkn = new sn_ws.RESTMessageV2('x_44115_tmc_test1.keystone token', 'post');
+		tkn.setStringParameter('contrail_tenant', current.u_contrail_tenant);
+
+		//override authentication profile
+		//authentication type ='basic'/ 'oauth2'
+		//r.setAuthentication(authentication type, profile name);
+		//new comment
+		var tkresponse = tkn.execute();
+		var tkresponseBody = tkresponse.getBody();
+		var tkhttpStatus = tkresponse.getStatusCode();
+		var tknjson = global.JSON.parse(tkresponseBody);
+		mytoken = tknjson.access.token.id;
+		gs.info(mytoken);
+	}
+	
+	catch(ex) {
+		var message = ex.getMessage();
+		gs.info(message);
+	}
+	// tmc: step 2: create the new policy
+	try {
+		var pol = new sn_ws.RESTMessageV2('x_44115_tmc_test1.Contrail policy update', 'get');
+		pol.setStringParameter('keytoken', mytoken);
+		pol.setStringParameter('tmcdummy', myaction);
+		
+		//override authentication profile
+		//authentication type ='basic'/ 'oauth2'
+		//r.setAuthentication(authentication type, profile name);
+		
+		var polresponse = pol.execute();
+		var polresponseBody = polresponse.getBody();
+		var polhttpStatus = polresponse.getStatusCode();
+		var curpolicies = global.JSON.parse(polresponseBody);
+		var policies = curpolicies["network-policys"];
+		//current.short_description = policies.length;
+		policynum=policies.length;
+		for(var p=0;p < policynum; p++){
+			if((policies[p].fq_name[1] == current.u_contrail_tenant)&&(policies[p].fq_name[2] == policyname)) {
+				foundpolicy=1;
+				policy_uuid=policies[p].uuid;
+			}
+		}
+	}
+	catch(ex) {
+		var message = ex.getMessage();
+		gs.info(message);
+	}
+	if((myaction=="Do Nothing")){
+		try {
+			var dnetlist = new sn_ws.RESTMessageV2('x_44115_tmc_test1.add contrail policy', 'get');
+			dnetlist.setStringParameter('keytoken', mytoken);
+			
+			//override authentication profile
+			//authentication type ='basic'/ 'oauth2'
+			//r.setAuthentication(authentication type, profile name);
+			
+			var dnets = dnetlist.execute();
+			var dnetsBody = dnets.getBody();
+			var dnetsStatus = dnets.getStatusCode();
+			var dnetsjson = global.JSON.parse(dnetsBody);
+			var dnetworks = dnetsjson["virtual-networks"];
+			var dmytenant = current.u_contrail_tenant;
+			for (var i = 0;i < dnetworks.length;i++) {
+				var dcurrent_net=dnetworks[i]["virtual-network"];
+				if((dcurrent_net.fq_name[1]==current.u_contrail_tenant)&&(dcurrent_net.fq_name[2]==current.u_contrail_network)) {
+					policylist=dcurrent_net.network_policy_refs;
+					vn_uuid=dcurrent_net.uuid;
+				}
+			}
+			numpolicies=policylist.length;
+			for (var j = 0;j < numpolicies;j++) {
+	            if((policylist[j].to[1]==current.u_contrail_tenant)&&(policylist[j].to[2]==policyname)) {
+					policylist.splice(j,1);
+					break;
+				}
+			}
+			policystr=global.JSON.stringify(policylist[0]);
+			for (var k = 1;k < policylist.length;k++) {
+				//policylist[j].attr.sequence.major++;
+				policystr=policystr + "," + global.JSON.stringify(policylist[k]);
+			}
+//			policystr=JSON.stringify(policylist);
+		}
+		catch(ex) {
+			var message = ex.getMessage();
+		}
+		// tmc: step 4: insert the new policy at the head of the list and update the virtual network
+		try {
+			var dr2 = new sn_ws.RESTMessageV2('x_44115_tmc_test1.add contrail policy', 'put');
+			dr2.setStringParameter('vn_uuid', vn_uuid);
+			//r2.setStringParameter('u_policyname', policyname);
+			dr2.setStringParameter('keytoken', mytoken);
+			dr2.setStringParameterNoEscape('oldpolicies', policystr);
+			dr2.setStringParameter('contrail_vn', current.u_contrail_network);
+			dr2.setStringParameter('contrail_tenant', current.u_contrail_tenant);
+			
+			//override authentication profile
+			//authentication type ='basic'/ 'oauth2'
+			//r.setAuthentication(authentication type, profile name);
+			
+			var dresponse2 = dr2.execute();
+			var dresponse2Body = dresponse2.getBody();
+			var dhttpStatus2 = dresponse2.getStatusCode();
+		}
+		catch(ex) {
+			var message = ex.getMessage();
+		}
+		
+		try {
+			var del = new sn_ws.RESTMessageV2('x_44115_tmc_test1.Contrail policy update', 'delete');
+			del.setStringParameter('keytoken', mytoken);
+			del.setStringParameter('policy_uuid', policy_uuid);
+			
+			//override authentication profile
+			//authentication type ='basic'/ 'oauth2'
+			//r.setAuthentication(authentication type, profile name);
+			
+			var dresponse = del.execute();
+			var dresponseBody = dresponse.getBody();
+			var dhttpStatus = dresponse.getStatusCode();
+		}
+		catch(ex) {
+			var message = ex.getMessage();
+		}
+	} else if(myaction=="Block Attacker") {
+		
+		if(foundpolicy == 1) {
+			try {
+				var upd = new sn_ws.RESTMessageV2('x_44115_tmc_test1.Contrail policy update', 'put');
+				upd.setStringParameter('victim_ip', current.u_victim_ip);
+				upd.setStringParameter('attacker_ip', current.u_attacker_ip);
+				upd.setStringParameter('u_policyname', policyname);
+				upd.setStringParameter('keytoken', mytoken);
+				upd.setStringParameter('action', "deny");
+				upd.setStringParameter('mirror_location', "null");
+				upd.setStringParameter('contrail_tenant', current.u_contrail_tenant);
+				upd.setStringParameter('policy_uuid', policy_uuid);
+				
+				//override authentication profile
+				//authentication type ='basic'/ 'oauth2'
+				//r.setAuthentication(authentication type, profile name);
+				
+				var updresponse = upd.execute();
+				var updresponseBody = updresponse.getBody();
+				var updhttpStatus = updresponse.getStatusCode();
+				//gs.addInfoMessage("TMC test");
+			}
+			catch(ex) {
+				var message = ex.getMessage();
+			}
+			
+		} else {
+			try {
+				//policyname=policyname + policynum;
+				var r = new sn_ws.RESTMessageV2('x_44115_tmc_test1.Contrail policy update', 'post');
+				r.setStringParameter('victim_ip', current.u_victim_ip);
+				r.setStringParameter('attacker_ip', current.u_attacker_ip);
+				r.setStringParameter('u_policyname', policyname);
+				r.setStringParameter('keytoken', mytoken);
+				r.setStringParameter('contrail_tenant', current.u_contrail_tenant);
+				
+				//override authentication profile
+				//authentication type ='basic'/ 'oauth2'
+				//r.setAuthentication(authentication type, profile name);
+				
+				var response = r.execute();
+				var responseBody = response.getBody();
+				var httpStatus = response.getStatusCode();
+				//gs.addInfoMessage("TMC test");
+			}
+			catch(ex) {
+				var message = ex.getMessage();
+			}
+			
+			// tmc: get all the virtual networks and all policies
+			try {
+				var netlist = new sn_ws.RESTMessageV2('x_44115_tmc_test1.add contrail policy', 'get');
+				netlist.setStringParameter('keytoken', mytoken);
+				
+				//override authentication profile
+				//authentication type ='basic'/ 'oauth2'
+				//r.setAuthentication(authentication type, profile name);
+				
+				var nets = netlist.execute();
+				var netsBody = nets.getBody();
+				var netsStatus = nets.getStatusCode();
+				var netsjson = global.JSON.parse(netsBody);
+				var networks = netsjson["virtual-networks"];
+				var mytenant = current.u_contrail_tenant;
+				var mypolicy = {"to": ["default-domain", mytenant , policyname], "attr":{"sequence":{"major":0, "minor": 0}}};
+				for (var l = 0;l < networks.length;l++) {
+					var current_net=networks[l]["virtual-network"];
+					if((current_net.fq_name[1]==current.u_contrail_tenant)&&(current_net.fq_name[2]==current.u_contrail_network)) {
+						policylist=current_net.network_policy_refs;
+						vn_uuid=current_net.uuid;
+					}
+				}
+				numpolicies=policylist.length;
+				policylist.unshift(mypolicy);
+				policystr=global.JSON.stringify(mypolicy);
+				for (var m = 1;m < policylist.length;m++) {
+					policylist[m].attr.sequence.major++;
+					policystr=policystr + "," + global.JSON.stringify(policylist[m]);
+				}
+				//policystr=JSON.stringify(policylist);
+			}
+			catch(ex) {
+				var message = ex.getMessage();
+			}
+			// tmc: step 4: insert the new policy at the head of the list and update the virtual network
+			try {
+				var r2 = new sn_ws.RESTMessageV2('x_44115_tmc_test1.add contrail policy', 'put');
+				r2.setStringParameter('vn_uuid', vn_uuid);
+				//r2.setStringParameter('u_policyname', policyname);
+				r2.setStringParameter('keytoken', mytoken);
+				r2.setStringParameterNoEscape('oldpolicies', policystr);
+				r2.setStringParameter('contrail_vn', current.u_contrail_network);
+				r2.setStringParameter('contrail_tenant', current.u_contrail_tenant);
+				
+				//override authentication profile
+				//authentication type ='basic'/ 'oauth2'
+				//r.setAuthentication(authentication type, profile name);
+				
+				var response2 = r2.execute();
+				var response2Body = response2.getBody();
+				var httpStatus2 = response2.getStatusCode();
+			}
+			catch(ex) {
+				var message = ex.getMessage();
+			}
+		}
+	}
+})(current, previous);
+]]></script>
+        <sys_class_name>sys_script</sys_class_name>
+        <sys_created_by>admin</sys_created_by>
+        <sys_created_on>2016-04-30 14:30:43</sys_created_on>
+        <sys_customer_update>true</sys_customer_update>
+        <sys_domain>global</sys_domain>
+        <sys_domain_path>/</sys_domain_path>
+        <sys_id>63ac28eadb47d600935cb20ebf96198b</sys_id>
+        <sys_mod_count>15</sys_mod_count>
+        <sys_name>contrail integration</sys_name>
+        <sys_overrides/>
+        <sys_package display_value="tmc test1" source="x_44115_tmc_test1">31cf1787dba21200935cb20ebf96192e</sys_package>
+        <sys_policy/>
+        <sys_replace_on_upgrade>false</sys_replace_on_upgrade>
+        <sys_scope display_value="tmc test1">31cf1787dba21200935cb20ebf96192e</sys_scope>
+        <sys_update_name>sys_script_63ac28eadb47d600935cb20ebf96198b</sys_update_name>
+        <sys_updated_by>admin</sys_updated_by>
+        <sys_updated_on>2016-08-01 20:07:34</sys_updated_on>
+        <template/>
+        <when>async</when>
+    </sys_script>
+    <sys_translated_text action="delete_multiple" query="documentkey=63ac28eadb47d600935cb20ebf96198b"/>
+</record_update>
